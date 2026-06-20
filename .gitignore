@@ -1,0 +1,10 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.dll
+Output/
+
+# Unity regenerates metas for docs; nothing references them by GUID
+*.md.meta
