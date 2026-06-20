@@ -28,6 +28,10 @@ namespace BetterMapFilter
         private const int CardSpriteSize = 64;
         private const int CardCornerRadius = 16;
 
+        // Size/inset of the native "jump to district" button lifted onto a card.
+        private const float FocusButtonSize = 40f;
+        private const float FocusButtonInset = 8f;
+
         // Highlight tint applied to a card's background when its filter is on/off.
         private static readonly Color OnColor = new(0.20f, 0.55f, 1f, 0.85f);
         private static readonly Color OffColor = new(1f, 1f, 1f, 0.08f);
@@ -185,6 +189,7 @@ namespace BetterMapFilter
             float cellWidth = (contentWidth - SpacingX * (Columns - 1)) / Columns;
             float cellHeight = cellWidth; // square cards
 
+            int focusButtons = 0;
             foreach (var section in _sections)
             {
                 var gridGo = new GameObject("BMF_Grid", typeof(RectTransform));
@@ -214,9 +219,13 @@ namespace BetterMapFilter
                 foreach (var filter in section.Filters)
                 {
                     filter.transform.SetParent(gridRect, false);
-                    BuildCard(filter);
+                    if (BuildCard(filter))
+                        focusButtons++;
                 }
             }
+
+            Context?.Logger.Info(
+                $"BetterMapFilter: built {_cards.Count} cards, {focusButtons} district focus buttons.");
 
             _gridBuilt = true;
         }
@@ -225,9 +234,10 @@ namespace BetterMapFilter
         /// Restyles a single switch row into a button card: a tinted background
         /// that lights up while the filter is on, the icon centered on top, and
         /// the label centered below. The original game <c>Toggle</c> is kept as
-        /// the source of truth but hidden; clicking the card flips it.
+        /// the source of truth but hidden; clicking the card flips it. Returns
+        /// <c>true</c> if the row carried a district focus button lifted onto it.
         /// </summary>
-        private void BuildCard(CityMapFilter filter)
+        private bool BuildCard(CityMapFilter filter)
         {
             var root = filter.gameObject;
 
@@ -315,6 +325,10 @@ namespace BetterMapFilter
             if (filter.Toggle != null)
                 filter.Toggle.interactable = false;
 
+            // District (neighborhood) switches carry a native "jump there" button.
+            // Lift it onto the card before we hide the row it normally lives in.
+            bool hasFocusButton = SetUpFocusButton(root, horizontal);
+
             // Drop the original horizontal row (held the label + focus button).
             if (horizontal != null && horizontal != labelGo?.transform)
                 horizontal.gameObject.SetActive(false);
@@ -346,6 +360,83 @@ namespace BetterMapFilter
             UpdateHighlight(card);
 
             _cards.Add(card);
+            return hasFocusButton;
+        }
+
+        /// <summary>
+        /// District rows expose a native focus button (active only when the
+        /// filter has a focus point) that jumps the city camera to that district.
+        /// The game nests it inside the row's "Horizontal" group, which the card
+        /// layout disables, so for any row that has it active we reparent it onto
+        /// the card as a small top-right button. Its original onClick (the game's
+        /// <c>OnFocusButtonClick</c>) is left untouched, and because the button
+        /// handles its own pointer click, jumping to a district never also flips
+        /// the filter toggle. Returns <c>true</c> when a button was attached.
+        /// </summary>
+        private static bool SetUpFocusButton(GameObject root, Transform horizontal)
+        {
+            if (horizontal == null)
+                return false;
+
+            Transform focusTf = horizontal.Find("FocusButton");
+            if (focusTf == null || !focusTf.gameObject.activeSelf)
+                return false; // non-district rows keep this button inactive
+
+            // Move it onto the card so it survives the row group being hidden.
+            focusTf.SetParent(root.transform, false);
+            focusTf.gameObject.SetActive(true);
+
+            if (focusTf is RectTransform focusRect)
+            {
+                focusRect.anchorMin = new Vector2(1f, 1f);
+                focusRect.anchorMax = new Vector2(1f, 1f);
+                focusRect.pivot = new Vector2(1f, 1f);
+                focusRect.sizeDelta = new Vector2(FocusButtonSize, FocusButtonSize);
+                focusRect.anchoredPosition = new Vector2(-FocusButtonInset, -FocusButtonInset);
+            }
+
+            // Render and raycast on top of the card background.
+            focusTf.SetAsLastSibling();
+
+            var focusLayout = focusTf.GetComponent<LayoutElement>();
+            if (focusLayout != null)
+                focusLayout.ignoreLayout = true;
+
+            // The button's icon normally lives in a child ("Background") whose size
+            // is driven by the now-removed row layout, so it can collapse to 0x0.
+            // Stretch every child to fill the button and make sure its graphic is
+            // visible, otherwise the lifted button would be invisible.
+            foreach (var childRect in focusTf.GetComponentsInChildren<RectTransform>(true))
+            {
+                if (childRect == focusTf)
+                    continue;
+                childRect.anchorMin = Vector2.zero;
+                childRect.anchorMax = Vector2.one;
+                childRect.offsetMin = Vector2.zero;
+                childRect.offsetMax = Vector2.zero;
+            }
+
+            bool anyVisible = false;
+            foreach (var g in focusTf.GetComponentsInChildren<Graphic>(true))
+            {
+                g.enabled = true;
+                if (g.color.a > 0f)
+                    anyVisible = true;
+            }
+
+            // Fallback: if nothing visible was found, drop a simple icon image on
+            // the button so the player still sees something to click.
+            if (!anyVisible)
+            {
+                var img = focusTf.GetComponent<Image>();
+                if (img == null)
+                    img = focusTf.gameObject.AddComponent<Image>();
+                img.enabled = true;
+                img.color = new Color(1f, 1f, 1f, 0.9f);
+                img.raycastTarget = true;
+            }
+
+            return true;
         }
 
         private static void UpdateHighlight(Card card)
